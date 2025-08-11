@@ -1,0 +1,4 @@
+source /opt/ros/noetic/setup.bash
+export LD_LIBRARY_PATH=/usr/local/lib:/opt/ros/noetic/lib
+source ~/catkin_ws/devel/setup.bash
+export DISABLE_ROS1_EOL_WARNINGS=1
