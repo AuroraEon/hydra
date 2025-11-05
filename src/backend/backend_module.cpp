@@ -296,6 +296,7 @@ bool BackendModule::spinOnce(bool force_update) {
 
   ScopedTimer sink_timer("backend/sinks", timestamp_ns);
   Sink::callAll(sinks_, timestamp_ns, *private_dsg_->graph, *deformation_graph_);
+  // Sink::callAll(sinks_, timestamp_ns, *state_->backend_graph->graph, *deformation_graph_);
   return true;
 }
 
@@ -707,9 +708,16 @@ void BackendModule::callUpdateFunctions(size_t timestamp_ns,
   merge_config.update_dynamic_attributes = false;
   private_dsg_->graph->mergeGraph(*unmerged_graph_, merge_config);
 
+  int a = 0; // 占位符，防止空循环体
+
   std::list<LayerCleanupFunc> cleanup_hooks;
   for (const auto& functor : update_functors_) {
     // TODO(nathan) keep track of names and push timing here
+    a++;
+    if(a==5){
+      int b=0;
+    }
+
     if (!functor) {
       continue;
     }
@@ -718,6 +726,8 @@ void BackendModule::callUpdateFunctions(size_t timestamp_ns,
     if (hooks.cleanup) {
       cleanup_hooks.push_back(hooks.cleanup);
     }
+
+    LOG(INFO) << "update_functors_[" << a << "]: " << typeid(*functor).name();
 
     functor->call(*unmerged_graph_, *private_dsg_, info);
     if (enable_merging) {
@@ -741,6 +751,29 @@ void BackendModule::callUpdateFunctions(size_t timestamp_ns,
       }
     }
   }
+
+    // Copy layers_[DsgLayers::ROOMS] to state.lcd_graph
+    // 创建临时图来存储 ROOMS 层
+    spark_dsg::DynamicSceneGraph::LayerIds layer_ids = {DsgLayers::ROOMS};
+    auto temp_graph = std::make_shared<spark_dsg::DynamicSceneGraph>(layer_ids);
+    
+    // 复制 ROOMS 层的所有节点
+    const auto& rooms_layer = private_dsg_->graph->getLayer(DsgLayers::ROOMS);
+    for (const auto& [node_id, node] : rooms_layer.nodes()) {
+        temp_graph->emplaceNode(DsgLayers::ROOMS, node_id, node->attributes().clone());
+    }
+    
+    // 复制 ROOMS 层的所有边
+    for (const auto& [edge_key, edge] : rooms_layer.edges()) {
+        temp_graph->insertEdge(edge.source, edge.target, edge.info->clone());
+    }
+    
+    // 将临时图合并到 lcd_graph
+    spark_dsg::GraphMergeConfig merge_config1;
+    // state_->lcd_graph->graph->mergeGraph(*temp_graph, merge_config1);
+
+    state_->lcd_graph->graph->mergeGraph(*temp_graph, merge_config1);
+    private_dsg_->graph->mergeGraph(*state_->backend_graph->graph, merge_config1);
 
   launchCallbacks(cleanup_hooks, info, private_dsg_.get());
 }

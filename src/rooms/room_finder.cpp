@@ -329,6 +329,7 @@ SceneGraphLayer::Ptr RoomFinder::makeRoomLayer(const SceneGraphLayer& places) {
     attrs->semantic_label = 0;
     attrs->name = room_id.getLabel();
     attrs->position = getRoomPosition(places, cluster);
+    attrs->is_active = true;
 
     rooms->emplaceNode(room_id, std::move(attrs));
     ++room_id;
@@ -350,7 +351,7 @@ void RoomFinder::addRoomPlaceEdges(DynamicSceneGraph& graph) const {
       continue;
     }
 
-    graph.insertParentEdge(room->second, id_node_pair.first);
+    // graph.insertParentEdge(room->second, id_node_pair.first);
   }
 }
 

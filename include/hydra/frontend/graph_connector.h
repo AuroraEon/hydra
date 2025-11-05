@@ -55,7 +55,8 @@ struct LayerConnector {
       bool include_dynamic = true;
     };
     // TODO(nathan) for implementation reasons, the parent has to be static
-    spark_dsg::LayerId parent_layer = spark_dsg::DsgLayers::PLACES;
+    // spark_dsg::LayerId parent_layer = spark_dsg::DsgLayers::PLACES;
+    spark_dsg::LayerId parent_layer = spark_dsg::DsgLayers::ROOMS;
     std::vector<ChildLayerConfig> child_layers{
         {spark_dsg::DsgLayers::OBJECTS, true, true}};
     size_t verbosity = 0;

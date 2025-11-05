@@ -171,8 +171,8 @@ GraphBuilder::GraphBuilder(const Config& config,
 
   addPostMeshCallback(
       std::bind(&GraphBuilder::updateObjects, this, std::placeholders::_1));
-  addPostMeshCallback(
-      std::bind(&GraphBuilder::updatePlaces2d, this, std::placeholders::_1));
+  // addPostMeshCallback(
+  //     std::bind(&GraphBuilder::updatePlaces2d, this, std::placeholders::_1));
 
   if (config.lcd_use_bow_vectors) {
     PipelineQueues::instance().bow_queue.reset(new PipelineQueues::BowQueue());
@@ -407,6 +407,33 @@ void GraphBuilder::updateImpl(const ActiveWindowOutput::Ptr& msg) {
 
   {  // start timing scope
     ScopedTimer timer("frontend/interlayer_edges", msg->timestamp_ns, true, 1, false);
+    
+    // Copy ROOMS layer from lcd_graph to dsg_
+    {
+        std::unique_lock<std::mutex> lock(state_->lcd_graph->mutex);
+        if (state_->lcd_graph->graph->hasLayer(DsgLayers::ROOMS)) {
+            // 创建临时图来存储 ROOMS 层
+            spark_dsg::DynamicSceneGraph::LayerIds layer_ids = {DsgLayers::ROOMS};
+            auto temp_graph = std::make_shared<spark_dsg::DynamicSceneGraph>(layer_ids);
+            
+            // 复制 ROOMS 层的所有节点
+            const auto& rooms_layer = state_->lcd_graph->graph->getLayer(DsgLayers::ROOMS);
+            for (const auto& [node_id, node] : rooms_layer.nodes()) {
+                temp_graph->emplaceNode(DsgLayers::ROOMS, node_id, node->attributes().clone());
+            }
+            
+            // 复制 ROOMS 层的所有边
+            for (const auto& [edge_key, edge] : rooms_layer.edges()) {
+                temp_graph->insertEdge(edge.source, edge.target, edge.info->clone());
+            }
+            
+            // 将临时图合并到 dsg_
+            spark_dsg::GraphMergeConfig merge_config;
+            // dsg_->graph->mergeGraph(*temp_graph, merge_config);
+            dsg_->graph->mergeGraph(*temp_graph, merge_config);
+        }
+    }
+
     graph_connector_.connect(*dsg_->graph);
   }
 
