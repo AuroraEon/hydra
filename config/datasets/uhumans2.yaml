@@ -65,6 +65,8 @@ frontend:
     recent_block_distance: 25
     minimum_relative_z: -1.
     maximum_relative_z: 1
+  room_update_interval_frames: 150
+  room_update_min_distance: 15.5
 backend:
   add_places_to_deformation_graph: true
   optimize_on_lc: true

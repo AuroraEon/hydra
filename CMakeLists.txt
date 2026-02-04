@@ -27,6 +27,8 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 # we turn off PCL precompile internally to get around having vtk linked. Note: kdtree is
 # REQUIRED to make sure we link against FLANN (used by euclidean extraction)
 find_package(PCL REQUIRED COMPONENTS common kdtree)
+find_package(VTK 7.1 REQUIRED)
+include(${VTK_USE_FILE})
 
 include(GNUInstallDirs)
 include(HydraBuildConfig)
@@ -37,6 +39,7 @@ target_include_directories(
   ${PROJECT_NAME}
   PUBLIC $<INSTALL_INTERFACE:include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> ${OpenCV_INCLUDE_DIRS}
+         ${VTK_INCLUDE_DIRS}
   PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${PCL_INCLUDE_DIRS}
 )
 target_link_libraries(
@@ -49,6 +52,7 @@ target_link_libraries(
          spatial_hash::spatial_hash
          teaserpp::teaser_registration
          ${OpenCV_LIBRARIES}
+         ${VTK_LIBRARIES}
   PRIVATE nanoflann::nanoflann ${PCL_LIBRARIES}
 )
 set_property(TARGET ${PROJECT_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)

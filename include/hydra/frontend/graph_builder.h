@@ -57,6 +57,7 @@
 #include "hydra/loop_closure/lcd_input.h"
 #include "hydra/odometry/pose_graph_from_odom.h"
 #include "hydra/utils/log_utilities.h"
+#include "hydra/frontend/grid_room_segmenter.h"
 
 namespace kimera_pgmo {
 class DeltaCompression;
@@ -100,6 +101,13 @@ class GraphBuilder : public Module {
     bool no_packet_collation = false;
     //! @brief Overwrite mesh timestamps using information from tracking layer
     bool overwrite_mesh_timestamps = false;
+    // === 新增配置 ===
+    int room_update_interval_frames = 150; // 每隔 150 帧尝试更新
+    double room_update_min_distance = 15.5; // 或者移动超过 15.5 米更新
+
+    // [新增] 接收墙壁点云并更新分割器
+    void updateArchitecture(const std::vector<Eigen::Vector3f>& wall_points, uint64_t timestamp_ns);
+    
   } const config;
 
   GraphBuilder(const Config& config,
@@ -124,6 +132,8 @@ class GraphBuilder : public Module {
   inline InputQueue::Ptr queue() const { return queue_; }
 
   void addSink(const Sink::Ptr& sink);
+
+  void updateArchitecture(const ActiveWindowOutput& input);
 
  protected:
   void addInputCallback(InputCallback callback);
@@ -204,14 +214,25 @@ class GraphBuilder : public Module {
 
   Sink::List sinks_;
 
+
+  // === 新增状态变量 ===
+  size_t room_update_counter_ = 0; // 计数器
+  Eigen::Vector3d last_room_update_pos_ = Eigen::Vector3d::Zero(); // 上一次更新时的位置
+  bool first_room_update_ = true; // 标记是否是第一次运行
+
   // TODO(lschmid): This mutex currently simply locks all data for manipulation.
   std::mutex mutex_;
+  // === 新增：用于存储全局累积地图 ===
+  std::shared_ptr<VolumetricMap> global_map_;
 
  private:
   void stopImpl();
 
   std::vector<std::function<void(ActiveWindowOutput::Ptr)>> input_callbacks_;
   std::vector<std::function<void(const ActiveWindowOutput&)>> post_mesh_callbacks_;
+
+  // 实例化分割器
+  std::unique_ptr<GridRoomSegmenter> grid_segmenter_;
 };
 
 void declare_config(GraphBuilder::Config& config);

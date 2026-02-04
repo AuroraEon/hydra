@@ -44,6 +44,15 @@
 #include <kimera_pgmo/utils/mesh_io.h>
 
 #include <fstream>
+#include <filesystem> // Ensure filesystem header is included
+
+#include <opencv2/highgui.hpp> // 用于 imwrite
+#include <opencv2/imgproc.hpp> // 用于颜色转换
+#include <random>              // 用于生成随机颜色
+#include <pcl/io/ply_io.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/common/common.h> // 用于 pcl::getMinMax3D
 
 #include "hydra/common/global_info.h"
 #include "hydra/common/launch_callbacks.h"
@@ -107,6 +116,9 @@ void declare_config(GraphBuilder::Config& config) {
   field(config.sinks, "sinks");
   field(config.no_packet_collation, "no_packet_collation");
   field(config.overwrite_mesh_timestamps, "overwrite_mesh_timestamps");
+  // === 新增 ===
+  config::field(config.room_update_interval_frames, "room_update_interval_frames");
+  config::field(config.room_update_min_distance, "room_update_min_distance");
 }
 
 GraphBuilder::GraphBuilder(const Config& config,
@@ -168,6 +180,8 @@ GraphBuilder::GraphBuilder(const Config& config,
   addInputCallback(std::bind(&GraphBuilder::updatePlaces, this, std::placeholders::_1));
   addInputCallback(
       std::bind(&GraphBuilder::updateFrontiers, this, std::placeholders::_1));
+  addInputCallback(
+      std::bind(&GraphBuilder::updateArchitecture, this, std::placeholders::_1));
 
   addPostMeshCallback(
       std::bind(&GraphBuilder::updateObjects, this, std::placeholders::_1));
@@ -177,6 +191,14 @@ GraphBuilder::GraphBuilder(const Config& config,
   if (config.lcd_use_bow_vectors) {
     PipelineQueues::instance().bow_queue.reset(new PipelineQueues::BowQueue());
   }
+  // 初始化 GridRoomSegmenter
+  GridRoomSegmenter::Config segmenter_config;
+  // segmenter_config.resolution = 0.05; // 如果以后需要在这里改参数
+  grid_segmenter_ = std::make_unique<GridRoomSegmenter>(segmenter_config);
+  // 注册回调
+  // addInputCallback(std::bind(&GraphBuilder::updateRoomsWithWatershed, 
+  //   this, std::placeholders::_1));
+
 }
 
 GraphBuilder::~GraphBuilder() {
@@ -414,6 +436,121 @@ void GraphBuilder::updateImpl(const ActiveWindowOutput::Ptr& msg) {
     updatePlaceMeshMapping(*msg);
   }
 }
+
+// graph_builder.cpp 中的 updateArchitecture 函数
+
+void GraphBuilder::updateArchitecture(const ActiveWindowOutput& input) {
+    if (!grid_segmenter_) return;
+
+    // 1. 如果有点云，先更新栅格地图 (累积)
+    if (!input.arch_wall_points.empty()) {
+        grid_segmenter_->updateWallMap(input.arch_wall_points);
+    }
+    if (!input.arch_floor_points.empty()) {
+        grid_segmenter_->updateFloorMap(input.arch_floor_points);
+    }
+
+    // 2. 决定是否运行分割
+    static size_t room_update_counter_ = 0;
+    room_update_counter_++;
+
+    // 假设每 100 帧执行一次分割和关联分析
+    // size_t update_interval = config.room_update_interval_frames > 0 ? config.room_update_interval_frames : 100;
+    size_t update_interval = 100;
+    
+    if (room_update_counter_ % update_interval == 0) {
+        LOG(INFO) << "[GraphBuilder] Triggering Room Segmentation at time " << input.timestamp_ns;
+        
+        // 3. 执行分割
+        grid_segmenter_->performSegmentation(input.timestamp_ns);
+        
+        // 4. 获取房间分割结果 (Markers)
+        // markers 是 CV_32S 类型，每个像素的值就是 Room ID
+        cv::Mat room_markers = grid_segmenter_->getLastRoomMarkers();
+        
+        if (room_markers.empty()) {
+            LOG(WARNING) << "[GraphBuilder] Room markers are empty, skipping object association.";
+            return;
+        }
+
+        // 5. 遍历 DSG 中的 Object 层，建立 Object -> Room 的关系
+        // 假设 Object 的坐标是在 World Frame，且 GridSegmenter 也是基于 World Frame
+        
+        // 这里的 scale_factor 取决于你的 DSG 坐标单位和 GridSegmenter 单位是否一致
+        // 通常都是米 (m)，所以是 1.0。如果是毫米需调整。
+        double scale_factor = 1.0; 
+
+        // === 6. 核心修改：建立关联并写入文件 ===
+          // 准备输出文件路径
+          std::string log_dir = logs_ ? logs_->getLogDir("frontend") : "./";
+          std::string output_file_path = log_dir + "/room_object_relations1.txt";
+          
+          // 使用 std::ios::app 进行追加写入
+          std::ofstream outfile(output_file_path, std::ios::app);
+          if (!outfile.is_open()) {
+              LOG(ERROR) << "[Hydra Room Seg] Unable to open file for writing: " << output_file_path;
+              return;
+          }
+
+          // 写入当前帧的 Header
+          outfile << "========================================\n";
+          outfile << "Frame: " << room_update_counter_ << " | Timestamp: " << input.timestamp_ns << "\n";
+          outfile << "========================================\n";
+
+          std::map<int, std::vector<std::string>> room_contents;
+
+          {
+              std::unique_lock<std::mutex> graph_lock(dsg_->mutex);
+              if (dsg_->graph->hasLayer(DsgLayers::OBJECTS)) {
+                  const auto& object_layer = dsg_->graph->getLayer(DsgLayers::OBJECTS);
+                  
+                  for (const auto& [node_id, node] : object_layer.nodes()) {
+                      // 获取物体属性
+                      // 这里的 ObjectNodeAttributes 包含语义标签 name
+                      auto& attrs = node->attributes<ObjectNodeAttributes>();
+                      
+                      // 坐标缩放 (根据之前的调试逻辑)
+                      Eigen::Vector3d obj_pos = attrs.position * scale_factor;
+                      cv::Point2i grid_pos = grid_segmenter_->worldToGrid(obj_pos);
+
+                      // 检查边界
+                      if (grid_pos.x >= 0 && grid_pos.x < room_markers.cols &&
+                          grid_pos.y >= 0 && grid_pos.y < room_markers.rows) {
+                          
+                          int room_id = room_markers.at<int>(grid_pos);
+                          
+                          // 过滤背景(0)和墙壁(-1或特定ID)
+                          if (room_id > 0) {
+                              // 组合语义信息: "Name(NodeID)"
+                              // attrs.name 来自 MeshSegmenter，已经是语义标签（如 "chair", "table"）
+                              std::string object_info = attrs.name + " (" + NodeSymbol(node_id).getLabel() + ")";
+                              room_contents[room_id].push_back(object_info);
+                          }
+                      }
+                  }
+              }
+          }
+
+          // 写入文件逻辑
+          if (room_contents.empty()) {
+              outfile << "No objects found in rooms this frame.\n";
+          } else {
+              for (const auto& [room_id, objects] : room_contents) {
+                  outfile << "Room ID " << room_id << " contains:\n";
+                  for (const auto& obj_str : objects) {
+                      outfile << "  - " << obj_str << "\n";
+                  }
+                  outfile << "\n"; // 房间之间空一行
+              }
+          }
+          
+          outfile << "\n"; // 帧之间空一行
+          outfile.close();
+
+          LOG(INFO) << "[Hydra Room Seg] Room-Object relations saved to: " << output_file_path;
+    }
+}
+
 
 void GraphBuilder::updateMesh(const ActiveWindowOutput& input) {
   {  // start timing scope

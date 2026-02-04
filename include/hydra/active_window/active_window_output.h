@@ -100,6 +100,11 @@ struct ActiveWindowOutput {
     return Eigen::Translation<T, 3>(world_t_body.cast<T>()) * world_R_body.cast<T>();
   }
 
+ public:
+  // [新增] 用于存储本帧提取的纯净墙壁点云
+  std::vector<Eigen::Vector3f> arch_wall_points;
+  std::vector<Eigen::Vector3f> arch_floor_points;
+
  protected:
   std::shared_ptr<VolumetricMap> map_;
 };
